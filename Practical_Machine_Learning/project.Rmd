@@ -1,0 +1,175 @@
+---
+title: "Simon Rodriguez"
+author: "Practical Machine Learning - Final project"
+date: "8th of September, 2017"
+output: html_document
+---
+
+
+# Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+### Goal
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. Here we may use any of the other variables to predict with. In this report we will describe how the model is built, how cross validation is employed, what the expected out of sample error is and why. We will also use the prediction model to predict 20 different test cases. 
+
+
+# Preparation and setting
+
+First of all, we begin loading the neccessary packages
+
+```{r library, echo = F, comment=F, message=F, warning=F}
+setwd("/home/simon/coursera/Practical_Machine_Learning/")
+```
+
+```{r setup, message=F, warning=F}
+library(caret)
+library(ggplot2)
+library(reshape2)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(reprtree)
+```
+
+Now, import the data from the URL's and load them from the local directory
+```{r load, warning=F, message=F, cache = T}
+# Download the files in case they are not available in the working directory
+if (!file.exists("trainPML.csv")){
+      trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+      testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+      download.file(trainURL, "trainPML.csv")
+      download.file(testURL, "testPML.csv")
+}
+
+train <- read.csv("trainPML.csv", na.strings = c("NA", "", "#DIV/0!"), header = T)
+test <- read.csv("testPML.csv", na.strings = c("NA", "", "#DIV/0!"), header = T)
+```
+
+If we take a look to the dataset it is easy to recognize that it can easily be simplified by removing some of the less important variables, as well as the variables with lots of NA values or the low-variance-ones
+```{r clean, warning=F, message=F, cache = T}
+# Remove the first seven columns, which have very little predicting power on "classe"
+train <- train[,-c(1:7)]
+test <- test[,-c(1:7)]
+
+# Select the columns with >80% NA values
+cleanVar <- sapply(train, function(x) sum(is.na(x)))
+
+train <- train[!cleanVar > 0.8*nrow(train)]
+test <- test[!cleanVar > 0.8*nrow(train)]
+
+# We also look for variables with low variance
+zeroVar <- nearZeroVar(train, saveMetrics=TRUE)
+sum(zeroVar$nzv) # There are no variables with low variance
+
+# Moreover, we produce a validation test to try the predictions made from the models
+set.seed(1654)           # Set the seed for reproducibility 
+
+subb <- createDataPartition(train$classe, p = 0.7, list = FALSE)
+train <- train[subb, ]
+valid <- train[-subb, ]
+```
+
+# Model fitting
+
+Now that the data has been cleansed we can fit some of the models that have been taught in the course. 
+
+### Classification trees
+Here we will consider 10-fold cross validation. To this end we introduce the "trainControl" function previous to the construction of the model
+```{r class_tree, warning=F, message=F, cache = T}
+execution <- trainControl(method = "cv", number = 10)      # 10-fold cross validation
+classTrees <- train(classe ~ ., data = train, method = "rpart", trControl = execution)
+classTrees          # See explicitly the model constructed
+fancyRpartPlot(classTrees$finalModel)
+```
+
+We can also take a look at the predictions made by this model and the confusion matrix associated
+
+```{r classTreesPred, warning=F, message=F, cache = T}
+classTreesPred <- predict(classTrees, valid)
+cmtree <- confusionMatrix(classTreesPred, valid$classe)
+
+# The accuracy of this model is the following
+cmtree$overall['Accuracy']
+
+# We can also plot the confusion matrix as a heatmap
+clasTreesConfusion <- as.data.frame(cmtree$table)
+clasTreesConfusion$Reference = with(clasTreesConfusion, factor(Reference, levels = rev(levels(Reference))))
+
+ggplot(data =  clasTreesConfusion, mapping = aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "red") +
+  theme_bw() + theme(legend.position = "none") +
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+```
+
+#### Predictions on the test set
+Taking into account the accuracy of this method, the predictions produced for the test set are:
+```{r classTreesPredFinal, warning=F, message=F, cache = T}
+finalClassPred <- predict(classTrees, test)       # Test set predictions
+finalClassPred
+```
+
+
+### Random Forest
+
+We perform the same process as in classification trees but for Random Forests
+```{r RF, warning=F, message=F, cache=T}
+RF <- randomForest(classe ~ ., data=train)
+RF                  # See explicitly the Random Forest results
+
+predRF<- predict(RF, valid)
+cmRF <- confusionMatrix(predRF, valid$classe)
+
+# Accuracy of the RF
+cmRF$overall['Accuracy']
+
+# Plot the confusion matrix as a heatmap
+confRF <- as.data.frame(cmRF$table)
+confRF$Reference = with(confRF, factor(Reference, levels = rev(levels(Reference))))
+
+ggplot(data =  confRF, mapping = aes(x = Prediction, y = Reference)) +
+  geom_tile(aes(fill = Freq), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Freq)), vjust = 1) +
+  scale_fill_gradient(low = "white", high = "red") +
+  theme_bw() + theme(legend.position = "none") +
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                title.position = "top", title.hjust = 0.5))
+```
+
+The accuracy for RF is far better than the one obtained for the Classification Trees, as expected. However, it is much more difficult to fit and to interpret.
+
+#### Predictions on the test set
+
+The predictions using Random Forest in the test set are the following:
+```{r RFpredFinal, warning=F, message=F, cache = T}
+finalRFpred <- predict(RF, test)       # Test set predictions
+finalRFpred
+```
+
+This concludes the final project for the course.
+
+
+
+
+
+
+
+
+
+
+
+
+
